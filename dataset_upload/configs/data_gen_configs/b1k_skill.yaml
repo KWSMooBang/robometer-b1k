@@ -1,0 +1,52 @@
+# BEHAVIOR-1K 2026 challenge demos -> RBM trajectories (TRAIN split)
+#
+#   uv run python -m dataset_upload.generate_hf_dataset \
+#     --config_path dataset_upload/configs/data_gen_configs/b1k_skill.yaml \
+#     --dataset.dataset_path=$B1K_ROOT
+#
+# One skill segment becomes one trajectory. dataset_name doubles as the HF config
+# name and its suffix selects the split (_train / _val / _all).
+# See docs/b1k/02-converter-spec.md.
+
+dataset:
+  dataset_path: /path/to/behavior-1k/2026-challenge-demos
+  dataset_name: b1k_skill_train
+
+  b1k:
+    video_key: observation.rgb.zed_link_camera_0
+    annotation_level: skill
+
+    # Convert a subset of the 100 tasks. Names, "task-0007" ids and indices all work.
+    # null = every task that has both annotations and downloaded video.
+    task_whitelist: ["turning_on_radio"]
+    max_episodes_per_task: null
+    max_segments_per_task: null
+
+    min_segment_frames: 15
+    max_segment_frames: 3000
+    val_demo_ratio: 0.1
+
+    # Truncated failure clips: cut a positive at alpha in [0.30, 0.85], label it
+    # failure with partial_success=alpha. This is the only in-dataset failure
+    # signal -- BEHAVIOR-1K demos are all successful.
+    truncated_negative_ratio: 0.5
+
+    data_source: b1k_skill
+    include_task_context: false
+    seed: 42
+
+output:
+  output_dir: datasets/b1k_rbm
+  max_trajectories: -1
+  max_frames: 64
+  use_video: true
+  fps: 30
+  shortest_edge_size: 240
+  center_crop: false
+  # Segments are read from 46-minute aggregated mp4s, so decoder seek locality
+  # matters more than raw parallelism. Keep this below the core count.
+  num_workers: 8
+
+hub:
+  push_to_hub: false
+  hub_repo_id: b1k_rbm

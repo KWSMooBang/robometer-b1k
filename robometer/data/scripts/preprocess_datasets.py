@@ -15,8 +15,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-import decord  # type: ignore
 import torch
+
+try:  # decord is the fastest reader but ships no macOS arm64 wheel
+    import decord  # type: ignore
+
+    _HAS_DECORD = True
+except ImportError:  # pragma: no cover - platform dependent
+    decord = None  # type: ignore
+    _HAS_DECORD = False
 from pyrallis import wrap
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
@@ -606,23 +613,40 @@ class DatasetPreprocessor:
 
             # If the source is a path string, open with a lightweight reader
             try:
-                # Try decord first (fastest for video decoding)
-                vr = decord.VideoReader(frames_src, num_threads=1)
-                total_frames = len(vr)
+                max_frames = self.config.max_frames_for_preprocessing
 
-                # Sample frames efficiently
-                if total_frames <= self.config.max_frames_for_preprocessing:
-                    frame_indices = list(range(total_frames))
+                def _uniform(total: int) -> list:
+                    if total <= max_frames:
+                        return list(range(total))
+                    return [int(i * total / max_frames) for i in range(max_frames)]
+
+                if _HAS_DECORD:
+                    # decord first (fastest for video decoding)
+                    vr = decord.VideoReader(frames_src, num_threads=1)
+                    frame_indices = _uniform(len(vr))
+                    frames_array = vr.get_batch(frame_indices).asnumpy()
+                    del vr
                 else:
-                    # Uniform sampling
-                    frame_indices = [
-                        int(i * total_frames / self.config.max_frames_for_preprocessing)
-                        for i in range(self.config.max_frames_for_preprocessing)
-                    ]
+                    # OpenCV fallback so the pipeline can be exercised on hosts
+                    # without a decord wheel (e.g. macOS arm64).
+                    import cv2
 
-                frames_array = vr.get_batch(frame_indices).asnumpy()
-
-                del vr
+                    cap = cv2.VideoCapture(frames_src)
+                    if not cap.isOpened():
+                        raise RuntimeError(f"cannot open {frames_src}")
+                    try:
+                        frame_indices = _uniform(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+                        collected = []
+                        for wanted in frame_indices:
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, wanted)
+                            ok, frame = cap.read()
+                            if ok:
+                                collected.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    finally:
+                        cap.release()
+                    if not collected:
+                        raise RuntimeError(f"decoded no frames from {frames_src}")
+                    frames_array = np.stack(collected)
 
             except Exception as e:
                 rank_0_print(f"Error in _process_one: {e}")
@@ -897,8 +921,40 @@ class DatasetPreprocessor:
             )
             return dataset
         else:
-            # Load from local disk
-            dataset = load_dataset(dataset_path)
+            # Load from local disk.
+            #
+            # The Hub branch above is what populates "frames_video"; without it
+            # every row is dropped later by _process_dataset_videos_threaded,
+            # which silently yields an empty cache. So patch the paths here too.
+            from datasets import load_from_disk
+
+            saved_to_disk = os.path.exists(os.path.join(dataset_path, "dataset_info.json")) or os.path.exists(
+                os.path.join(dataset_path, "state.json")
+            )
+            if saved_to_disk:
+                dataset = load_from_disk(dataset_path)
+            else:
+                dataset = load_dataset(dataset_path, name=subset, split="train")
+
+            if isinstance(dataset, DatasetDict):
+                dataset = dataset["train"] if "train" in dataset else next(iter(dataset.values()))
+
+            # "frames" holds a path relative to the converter's output_dir, which
+            # is the parent of this dataset directory.
+            root = os.environ.get("ROBOMETER_DATASET_PATH", "") or os.path.dirname(
+                os.path.abspath(dataset_path)
+            )
+
+            def patch_local_path(rel_path: str) -> str:
+                return rel_path if os.path.isabs(rel_path) else os.path.join(root, rel_path)
+
+            dataset = dataset.map(
+                lambda x: {
+                    "frames_video": patch_local_path(x["frames"]),
+                    "frames_path": patch_local_path(x["frames"]),
+                }
+            )
+            rank_0_print(f"    📁 Loaded local dataset from {dataset_path} (video root: {root})")
             return dataset
 
     def _show_preprocessed_datasets(self, all_datasets: list[str]):

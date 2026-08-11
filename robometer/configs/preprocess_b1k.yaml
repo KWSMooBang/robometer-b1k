@@ -1,0 +1,48 @@
+# Preprocess the converted BEHAVIOR-1K clips into the npz + index cache training reads.
+#
+#   uv run python -m robometer.data.scripts.preprocess_datasets \
+#     --config robometer/configs/preprocess_b1k.yaml \
+#     --cache_dir=$ROBOMETER_PROCESSED_DATASETS_PATH
+#
+# Two ways to point at the data:
+#
+#   local  (no Hub round-trip -- what the task-0000 validation run uses)
+#     train_datasets: ["datasets/b1k_rbm/b1k_skill_train"]
+#     train_subsets:  [["b1k_skill_train"]]
+#     The path is the directory generate_hf_dataset saved; its parent is used as
+#     the video root, so keep the mp4 tree next to it.
+#
+#   hub
+#     export ROBOMETER_DATASET_PATH=/path/holding/downloaded/datasets
+#     huggingface-cli download <user>/b1k_rbm --repo-type dataset \
+#       --local-dir $ROBOMETER_DATASET_PATH/b1k_rbm
+#     train_datasets: ["<user>/b1k_rbm"]
+#     train_subsets:  [["b1k_skill_train"]]
+#
+# See docs/b1k/03-preprocess-train-spec.md.
+
+train_datasets:
+  - "datasets/b1k_rbm/b1k_skill_train"
+train_subsets:
+  - ["b1k_skill_train"]
+
+eval_datasets:
+  - "datasets/b1k_rbm/b1k_skill_val"
+eval_subsets:
+  - ["b1k_skill_val"]
+
+# 32 frames per clip in the cache; training subsamples 8 of them per sample, and
+# that 32 -> 8 choice is what the rewind / reverse strategies draw on.
+max_frames_for_preprocessing: 32
+video_frame_sampling: "uniform"
+num_proc: 1
+num_threads: 16
+force_reprocess: false
+cache_dir: /path/to/robometer/processed_datasets
+
+# npz is ~5.5 MB per trajectory uncompressed, so check disk before scaling up.
+precompute_embeddings: false
+embeddings_cache_dir: "embeddings"
+dinov2_model: "facebook/dinov2-base"
+sentence_model: "sentence-transformers/all-MiniLM-L12-v2"
+embedding_batch_size: 64

@@ -53,6 +53,7 @@ ALL_DATASOURCES = [
     "usc_koch_human_robot_paired_robot",
     "hand_paired_human",
     "hand_paired_robot",
+    "b1k_skill",
 ]
 
 DATASET_CATEGORY = {
@@ -87,6 +88,13 @@ DATASET_CATEGORY = {
 }
 
 DATASET_MAP = {
+    # BEHAVIOR-1K subtask segments. Deliberately absent from DATA_SOURCE_CATEGORY:
+    # successful and failure rows are mixed inside one data_source and are already
+    # separated per row by quality_label.
+    "b1k": {
+        "train": ["datasets_b1k_rbm_b1k_skill_train_b1k_skill_train"],
+        "eval": ["datasets_b1k_rbm_b1k_skill_val_b1k_skill_val"],
+    },
     "others": {
         "train": [
             "jesbu1_molmoact_rfm_molmoact_dataset_household",

@@ -99,12 +99,38 @@ BASE_FEATURES = {
 
 
 @dataclass
+class B1KConfig:
+    """BEHAVIOR-1K specific options (see docs/b1k/02-converter-spec.md)."""
+
+    video_key: str = field(
+        default="observation.rgb.zed_link_camera_0", metadata={"help": "Camera stream to cut clips from"}
+    )
+    annotation_level: str = field(default="skill", metadata={"help": "'skill' or 'primitive'"})
+    task_whitelist: Optional[list[str]] = field(
+        default=None, metadata={"help": "Task names, 'task-0007' ids, or indices. None = all tasks"}
+    )
+    max_episodes_per_task: Optional[int] = field(default=None, metadata={"help": "Cap episodes per task"})
+    max_segments_per_task: Optional[int] = field(default=None, metadata={"help": "Cap segments per task"})
+    min_segment_frames: int = field(default=15, metadata={"help": "Drop segments shorter than this"})
+    max_segment_frames: int = field(default=3000, metadata={"help": "Drop segments longer than this"})
+    val_demo_ratio: float = field(default=0.1, metadata={"help": "Fraction of each task's demos routed to val"})
+    truncated_negative_ratio: float = field(
+        default=0.0, metadata={"help": "Fraction of positives that also get a truncated failure clip"}
+    )
+    skip_split_range: bool = field(default=False, metadata={"help": "Drop interrupted segments instead of using range 0"})
+    data_source: str = field(default="b1k_skill", metadata={"help": "data_source written to every row"})
+    include_task_context: bool = field(default=False, metadata={"help": "Append '(task: ...)' to instructions"})
+    seed: int = field(default=42, metadata={"help": "RNG seed for negative sampling"})
+
+
+@dataclass
 class DatasetConfig:
     """Config for dataset settings"""
 
     dataset_path: str = field(default="", metadata={"help": "Path to the dataset"})
     dataset_name: str = field(default=None, metadata={"help": "Name of the dataset (defaults to dataset_type)"})
     exclude_wrist_cam: bool = field(default=False, metadata={"help": "Exclude wrist camera views (MIT Franka only)"})
+    b1k: B1KConfig = field(default_factory=B1KConfig)
 
 
 @dataclass
@@ -1039,6 +1065,36 @@ def main(cfg: GenerateConfig):
 
         print(f"Loading RoboReward dataset from: {cfg.dataset.dataset_path}")
         task_data = load_roboreward_dataset(cfg.dataset.dataset_path, cfg.dataset.dataset_name)
+        trajectories = flatten_task_data(task_data)
+    elif "b1k" in cfg.dataset.dataset_name.lower():
+        from dataset_upload.dataset_loaders.b1k_loader import load_b1k_dataset
+
+        # The dataset_name doubles as the HF config name, and its suffix picks
+        # the split: b1k_skill_train / b1k_skill_val / b1k_skill_all.
+        name = cfg.dataset.dataset_name.lower()
+        split = "val" if name.endswith("_val") else ("all" if name.endswith("_all") else "train")
+        b1k = cfg.dataset.b1k
+
+        print(f"Loading BEHAVIOR-1K demos from: {cfg.dataset.dataset_path} (split={split})")
+        task_data = load_b1k_dataset(
+            cfg.dataset.dataset_path,
+            video_key=b1k.video_key,
+            annotation_level=b1k.annotation_level,
+            max_frames=cfg.output.max_frames,
+            min_segment_frames=b1k.min_segment_frames,
+            max_segment_frames=b1k.max_segment_frames,
+            split=split,
+            val_demo_ratio=b1k.val_demo_ratio,
+            task_whitelist=b1k.task_whitelist,
+            max_episodes_per_task=b1k.max_episodes_per_task,
+            max_segments_per_task=b1k.max_segments_per_task,
+            truncated_negative_ratio=b1k.truncated_negative_ratio,
+            skip_split_range=b1k.skip_split_range,
+            data_source=b1k.data_source,
+            include_task_context=b1k.include_task_context,
+            seed=b1k.seed,
+            report_path=os.path.join(cfg.output.output_dir, f"{name}_conversion_report.json"),
+        )
         trajectories = flatten_task_data(task_data)
     elif "robofac" in cfg.dataset.dataset_name.lower():
         from dataset_upload.dataset_loaders.robofac_loader import load_robofac_dataset
