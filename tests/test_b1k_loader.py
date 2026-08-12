@@ -185,6 +185,6 @@ def test_truncated_negatives_carry_partial_success():
     assert negatives
     for neg in negatives:
         assert neg["quality_label"] == "failure"
-        assert 0.30 <= neg["partial_success"] <= 0.85
+        assert 0.30 <= neg["partial_success"] <= 0.70
         start, end = neg["metadata"]["segment_frames"]
         assert end > start

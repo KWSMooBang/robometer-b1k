@@ -324,6 +324,37 @@ WANDB_MODE=offline ./scripts/b1k_pipeline.sh train
 `smoke` 단계는 원래부터 `logging.log_to=[]`라 wandb를 타지 않는다. 먼저 smoke로 학습 경로를
 검증하고 나서 `train`으로 넘어가면 이 문제에 시간을 안 뺏긴다.
 
+### `TypeError: the JSON object must be str, bytes or bytearray, not NoneType` (wandb)
+
+스택이 `wandb_login._print_logged_in_message → wandb_setup._get_username → server.query_with_timeout`로
+끝난다. 로그인은 성공했고, **"logged in as ..." 한 줄을 출력하려다** 죽는 것이다.
+
+**원인:** 설치된 wandb의 버그. 서버가 `flags: null`을 돌려줄 때:
+
+```python
+self._flags = json.loads(self._viewer.get("flags", "{}"))   # 버그: 키가 있고 값이 None이면 default가 안 먹는다
+self._flags = json.loads(self._viewer.get("flags") or "{}") # 최신 버전의 수정
+```
+
+**즉시 우회** — 크래시 지점이 `if not _silent:` 안에 있으므로:
+
+```bash
+WANDB_SILENT=true ./scripts/b1k_pipeline.sh train
+```
+
+**제대로 된 수정:**
+
+```bash
+uv pip install -U wandb
+```
+
+**아예 피하려면:**
+
+```bash
+WANDB=off ./scripts/b1k_pipeline.sh train        # 로깅 없이
+WANDB_MODE=offline ./scripts/b1k_pipeline.sh train  # 로컬에 쌓고 나중에 wandb sync
+```
+
 ### 화면을 뒤덮는 warning들 — 처리 완료
 
 전부 무해하지만 실제 실패 메시지를 묻어 버리므로 출처별로 막아 뒀다.

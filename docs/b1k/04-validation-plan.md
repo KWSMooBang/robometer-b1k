@@ -133,7 +133,7 @@ B1K_ROOT=$B1K_ROOT pytest tests/test_b1k_loader.py -q
 - 종료 코드 0, `b1k_conversion_report.json` 생성
 - 생성된 mp4 200개 중 무작위 10개: `ffprobe`로 `nb_frames >= 8`, 240×240
 - HF Dataset row 수 == mp4 수
-- `partial_success` 분포: positive는 전부 1.0, truncated는 0.30~0.85
+- `partial_success` 분포: positive는 전부 1.0, truncated는 0.30~0.70
 
 **풀 변환**
 
@@ -146,10 +146,18 @@ B1K_ROOT=$B1K_ROOT pytest tests/test_b1k_loader.py -q
 `b1k_skill_train`에서 무작위 truncated 20개를 뽑아:
 
 **통과 조건**
-- 클립 마지막 프레임에서 subtask가 **아직 완료되지 않았음**을 육안 확인 (α 상한 0.85가 너무 높지 않은지)
+- 클립 마지막 프레임에서 subtask가 **아직 완료되지 않았음**을 육안 확인.
+  α 상한(현재 0.70)이 너무 높으면 사실상 완료된 클립이 failure로 라벨링되어 노이즈가 된다.
+  반대로 낮추면 0.70~1.0 구간에 네거티브가 전혀 없어져 그 구간에서 조기 전이가 날 수 있으므로,
+  **G8 캘리브레이션에서 전이 임계값이 그 구간에 걸리는지 반드시 확인할 것**
 - 라벨 시뮬레이션: `compute_progress_from_segment(...)` + `compute_success_labels(...)`를
-  실제 값으로 호출해 `progress`가 마지막 프레임만 α이고 나머지 0, `success`가 전부 0인지 확인
+  실제 값으로 호출. **두 경우를 모두 확인할 것:**
+  - `frame_indices`가 마지막 프레임 포함 → `progress`는 그 프레임만 α, 나머지 0
+  - 미포함 → `progress`가 선형 0→1.0 (논문 규정 위반이며, `predict_last_frame_partial_progress=true`가
+    마스크로 이를 무력화한다는 것이 요점)
+  - 두 경우 모두 `success`는 전부 0
 - positive에 대해서는 `progress[-1] == 1.0`, `success[-1] == 1.0`
+- 학습 인자에 `data.predict_last_frame_partial_progress=true`가 들어갔는지 확인
 
 이 게이트는 코드로 확인할 수 있다:
 

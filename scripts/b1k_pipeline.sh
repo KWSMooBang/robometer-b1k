@@ -10,6 +10,7 @@
 #   ./scripts/b1k_pipeline.sh preview    # contact sheet, LOOK AT THIS
 #   ./scripts/b1k_pipeline.sh preprocess # clips -> npz cache
 #   ./scripts/b1k_pipeline.sh verify     # cache sanity before GPU time
+#   ./scripts/b1k_pipeline.sh wandb      # check the wandb entity works
 #   ./scripts/b1k_pipeline.sh smoke      # 20-step training run
 #   ./scripts/b1k_pipeline.sh train      # the real run
 #   ./scripts/b1k_pipeline.sh all        # check -> verify (stops before training)
@@ -85,6 +86,44 @@ do_preprocess() {
     --cache_dir="$ROBOMETER_PROCESSED_DATASETS_PATH"
 }
 
+do_wandb() {
+  banner "wandb entity check"
+  # Runs in seconds, before the 16 GB checkpoint download. wandb rejects runs
+  # logged to an organization root, and guessing an entity name (an email
+  # prefix, say) fails with "entity ... not found".
+  $RUN python - <<'PY'
+import os, sys, wandb
+
+try:
+    api = wandb.Api()
+    viewer = api.viewer
+    print(f"  username        : {viewer.username}")
+    print(f"  teams           : {viewer.teams}")
+    print(f"  default_entity  : {api.default_entity}")
+except Exception as exc:
+    print(f"  ! could not query wandb: {exc}")
+    print("  run `wandb login` first")
+    sys.exit(1)
+
+entity = os.environ.get("WANDB_ENTITY") or api.default_entity
+print(f"\n  trying wandb.init(entity={entity!r}) ...")
+try:
+    run = wandb.init(project="robometer", entity=entity, name="b1k-entity-check",
+                     mode="online", settings=wandb.Settings(silent=True))
+    url = run.url
+    run.finish()
+    print(f"  ✅ works: {url}")
+    print(f"  use: WANDB_ENTITY={entity} ./scripts/b1k_pipeline.sh train")
+except Exception as exc:
+    print(f"  ❌ {type(exc).__name__}: {exc}")
+    print("\n  pick one of the teams listed above:")
+    print("    WANDB_ENTITY=<team> ./scripts/b1k_pipeline.sh wandb")
+    print("  or skip logging entirely:")
+    print("    WANDB=off ./scripts/b1k_pipeline.sh train")
+    sys.exit(1)
+PY
+}
+
 do_verify() {
   banner "verify train cache"
   $RUN python scripts/b1k_verify_cache.py "$TRAIN_KEY"
@@ -93,6 +132,14 @@ do_verify() {
 }
 
 # data.max_frames=8 matches how Robometer-4B was pretrained; see docs/b1k/02 §5.1.1.
+#
+# data.predict_last_frame_partial_progress=true keeps the paper's rule that failed
+# trajectories carry no frame-level progress target (they are "p=None", used only
+# through the preference objective). Our truncated negatives set partial_success,
+# and only the SUBOPTIMAL strategy swaps them into the rejected slot -- the other
+# three leave them as the chosen trajectory, where progress loss *is* applied.
+# Without this flag they would be trained toward a linear 0->1 progress curve,
+# i.e. "this failure completed the subtask". See docs/b1k/NOTION.md §5.3.
 train_args() {
   cat <<EOF
 model.base_model_id=Qwen/Qwen3-VL-4B-Instruct
@@ -105,6 +152,7 @@ data.eval_datasets=[b1k]
 data.max_frames=8
 data.traj_same_source_prob=0.8
 data.dataset_preference_ratio=0.3
+data.predict_last_frame_partial_progress=true
 training.load_from_checkpoint=robometer/Robometer-4B
 training.per_device_train_batch_size=8
 training.learning_rate=2e-5
@@ -156,6 +204,7 @@ case "$stage" in
   preview)    do_preview ;;
   preprocess) do_preprocess ;;
   verify)     do_verify ;;
+  wandb)      do_wandb ;;
   smoke)      do_smoke ;;
   train)      do_train ;;
   all)        do_check; do_convert; do_preview; do_preprocess; do_verify

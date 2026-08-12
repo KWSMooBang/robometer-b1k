@@ -438,18 +438,28 @@ custom eval 메트릭 이름. train/val subset이 서로 다른 data_source를 �
 
 ```
 positive segment [a, b) 에 대해
-  α ~ U(0.30, 0.85)
+  α ~ U(0.30, 0.70)
   clip = [a, a + round(α*(b-a)))
   quality_label   = "failure"
   partial_success = α
 ```
 
 이 조합이 학습 라벨에서 어떻게 되는지 (코드 확인 완료):
-- `compute_progress_from_segment`: `partial_success != 1.0`이면 progress를 전부 0으로 만들고
-  **원본 마지막 프레임에 해당하는 위치에만 α**를 넣는다 (`helpers.py:625` 이후 블록).
-- `compute_success_labels`: `quality_label`이 failure면 **전 프레임 success=0**.
 
-즉 "이 클립은 subtask의 α 지점까지만 왔고 아직 성공이 아니다"가 정확히 학습된다.
+- `compute_success_labels`: `quality_label`이 failure면 **전 프레임 success=0**. 창과 무관하게 일관되며
+  논문의 `s_t = 0` 정의와 부합한다. **우리가 실제로 의존하는 신호는 이것이다.**
+- `compute_progress_from_segment`: **조건부다.** `partial_success != 1.0`이고 **샘플된 창이 원본
+  마지막 프레임을 포함할 때만** progress를 전부 0으로 만들고 그 위치에 α를 넣는다
+  (`helpers.py:628` 블록). 포함하지 않으면 **일반 선형 progress(0→1.0)가 그대로 나간다.**
+
+두 번째 경우는 "이 실패 클립이 subtask를 100% 완료했다"는 타깃이 되어
+[논문](https://arxiv.org/abs/2603.02115)의 규정(실패 궤적은 `p = None`, progress 타깃 미부여)과
+어긋난다. progress 손실은 chosen(A)에만 걸리는데, truncated를 rejected로 옮기는 것은 `SUBOPTIMAL`
+분기뿐이라 `[1,1,1,1]`에서는 약 75%가 chosen에 남는다.
+
+**따라서 학습 시 `data.predict_last_frame_partial_progress=true`를 반드시 켤 것**
+(`b1k_pipeline.sh`의 `train_args`에 반영 완료). 창이 마지막 프레임을 포함하면 그 프레임만,
+포함하지 않으면 전부 마스크되어 progress 손실 기여가 0이 된다.
 
 생성 비율: `truncated_negative_ratio` (기본 0.5 → positive 2개당 truncated 1개).
 같은 segment에서 최대 1개만 만든다. α는 `seed` 고정 RNG로 뽑아 재현성 유지.
@@ -461,13 +471,23 @@ positive segment [a, b) 에 대해
 
 | 전략 | 만들어지는 네거티브 | FSM에서 방지하는 오류 |
 |------|--------------------|----------------------|
-| `DIFFERENT_TASK` / `DIFFERENT_TASK_INSTRUCTION` | 다른 subtask 지시문 + 현재 영상 | 잘못된 subtask에 대한 오전이 |
+| `DIFFERENT_TASK` | **다른 영상** + 원래 지시문 | 잘못된 subtask에 대한 오전이 (부분적) |
 | `REWIND` | 진행하다 되돌아가는 클립 | 되감김/미끄러짐을 진행으로 오인 |
 | `REVERSE_PROGRESS` | 역재생 | progress 방향성 |
-| `SUBOPTIMAL` | 같은 task의 저품질 궤적 | (본 데이터셋엔 실패 데모가 없어 미작동) |
+| `SUBOPTIMAL` | 같은 task의 저품질 궤적 | truncated 네거티브가 이 역할을 채운다 (아래) |
+| `DIFFERENT_TASK_INSTRUCTION` | **같은 영상** + 다른 지시문 | **현재 미사용** (ProgressSampler 소속) |
 
-**본 데이터셋에는 실패 데모가 없다.** 따라서 `SUBOPTIMAL` 전략은 사실상 놀고,
-실패 신호는 전부 §6.1 + `DIFFERENT_TASK` + `REWIND`에서 나온다. 2단계에서 정책 롤아웃 실패 궤적을
+**정정:** 초안에서는 `SUBOPTIMAL`이 "실패 데모가 없어 미작동"이라고 적었으나, §6.1의 truncated
+네거티브가 `_has_suboptimal`을 `True`로 만들어 이 전략이 살아난다. 오히려 truncated 클립이
+학습에 반영되는 **주 경로**가 `SUBOPTIMAL`이다 (`partial_success` 비교 후 자동 스왑, `pref.py:117-125`).
+따라서 이 전략 비율을 0으로 주면 안 된다.
+
+`DIFFERENT_TASK_INSTRUCTION`(같은 영상 + 틀린 지시문)은 FSM 조기 전이를 가장 직접적으로 겨냥하지만
+ProgressSampler에 속해 있어, `sample_type_ratio: [1, 0, 0]`인 현재 설정에서는 생성되지 않는다.
+`progress_strategy_ratio`도 같은 이유로 무효다.
+
+**본 데이터셋에는 실패 데모가 없다.** 실패 신호는 §6.1의 truncated + `DIFFERENT_TASK` + `REWIND`에서
+나온다. 2단계에서 정책 롤아웃 실패 궤적을
 수집해 `quality_label="failure"`로 추가하는 것이 가장 큰 개선 여지다 ([05 §4](05-runtime-contract.md#4-2단계-실패-데이터-수집)).
 
 ### 6.3 2단계 후보 (지금 구현하지 말 것)

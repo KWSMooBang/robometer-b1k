@@ -280,7 +280,7 @@ def load_b1k_dataset(
     max_episodes_per_task: Optional[int] = None,
     max_segments_per_task: Optional[int] = None,
     truncated_negative_ratio: float = 0.0,
-    truncated_alpha_range: tuple[float, float] = (0.30, 0.85),
+    truncated_alpha_range: tuple[float, float] = (0.30, 0.70),
     skip_split_range: bool = False,
     data_source: str = DEFAULT_DATA_SOURCE,
     include_task_context: bool = False,

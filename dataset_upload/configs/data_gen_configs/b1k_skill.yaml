@@ -26,10 +26,12 @@ dataset:
     max_segment_frames: 3000
     val_demo_ratio: 0.1
 
-    # Truncated failure clips: cut a positive at alpha in [0.30, 0.85], label it
-    # failure with partial_success=alpha. This is the only in-dataset failure
-    # signal -- BEHAVIOR-1K demos are all successful.
+    # Truncated failure clips: cut a positive at alpha in [alpha_min, alpha_max],
+    # label it failure with partial_success=alpha. This is the only in-dataset
+    # failure signal -- BEHAVIOR-1K demos are all successful.
     truncated_negative_ratio: 0.5
+    truncated_alpha_min: 0.30
+    truncated_alpha_max: 0.70
 
     data_source: b1k_skill
     include_task_context: false

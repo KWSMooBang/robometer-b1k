@@ -131,6 +131,16 @@ class B1KConfig:
     truncated_negative_ratio: float = field(
         default=0.0, metadata={"help": "Fraction of positives that also get a truncated failure clip"}
     )
+    truncated_alpha_min: float = field(
+        default=0.30, metadata={"help": "Earliest cut point for a truncated negative, as a fraction of the segment"}
+    )
+    truncated_alpha_max: float = field(
+        default=0.70,
+        metadata={
+            "help": "Latest cut point. Raising it toward 1.0 makes negatives harder but risks "
+            "labelling near-complete clips as failures"
+        },
+    )
     skip_split_range: bool = field(default=False, metadata={"help": "Drop interrupted segments instead of using range 0"})
     data_source: str = field(default="b1k_skill", metadata={"help": "data_source written to every row"})
     include_task_context: bool = field(default=False, metadata={"help": "Append '(task: ...)' to instructions"})
@@ -1117,6 +1127,7 @@ def main(cfg: GenerateConfig):
             max_episodes_per_task=b1k.max_episodes_per_task,
             max_segments_per_task=b1k.max_segments_per_task,
             truncated_negative_ratio=b1k.truncated_negative_ratio,
+            truncated_alpha_range=(b1k.truncated_alpha_min, b1k.truncated_alpha_max),
             skip_split_range=b1k.skip_split_range,
             data_source=b1k.data_source,
             include_task_context=b1k.include_task_context,

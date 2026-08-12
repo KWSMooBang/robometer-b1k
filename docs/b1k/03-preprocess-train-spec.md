@@ -216,9 +216,15 @@ uv run python train.py \
 | `data.sample_type_ratio` | `[1,0,0]` | 그대로 | 한 번의 forward로 3개 head 전부 학습 |
 | `data.traj_same_source_prob` | 0.5 | **0.8** | 같은 소스(=다른 subtask) 네거티브가 FSM 오전이 방지에 직결 |
 | `data.dataset_preference_ratio` | 0.7 | **0.3** | 데이터셋 내장 선호쌍이 없으므로 생성 전략 비중을 높임 |
-| `data.preference_strategy_ratio` | `[1,1,1,1]` | `[1,0,2,1]` | `SUBOPTIMAL`(2번째)은 실패 데모가 없어 무의미 → 0, `DIFFERENT_TASK` 강화 |
-| `data.progress_strategy_ratio` | `[1,1,1,1]` | `[1,2,1,1]` | forward progress 비중 ↑ |
+| `data.preference_strategy_ratio` | `[1,1,1,1]` | **그대로** | 아래 정정 참고 |
+| `data.progress_strategy_ratio` | `[1,1,1,1]` | 무효 | `sample_type_ratio=[1,0,0]`이면 ProgressSampler가 생성되지 않는다 |
+
+> **정정.** 초안에서 `preference_strategy_ratio`를 `[1,0,2,1]`로(=`SUBOPTIMAL`을 0으로) 권했으나
+> **틀렸다.** truncated 네거티브가 `_has_suboptimal`을 `True`로 만들고, truncated가 학습에 반영되는
+> 주 경로가 바로 `SUBOPTIMAL`이다(`partial_success` 비교 후 자동 스왑). 0으로 주면 네거티브가 죽는다.
+> 기본값 `[1,1,1,1]`로 baseline을 먼저 잡을 것.
 | `data.max_frames` | 16 | **8** | Robometer-4B가 8프레임으로 학습됨 ([02 §5.1.1](02-converter-spec.md#511-왜-8인가)). config 기본값 16을 그대로 쓰면 사전학습 분포와 어긋난다 |
+| `data.predict_last_frame_partial_progress` | False | **true** | 논문은 실패 궤적에 progress 타깃을 주지 않는다(`p = None`). 끄면 truncated 네거티브가 선형 0→1.0 타깃으로 학습된다 ([02 §6.1](02-converter-spec.md#61-truncated)) |
 | `data.min_frames_per_trajectory` | 5 | 그대로 | |
 
 > 위 ratio 순서는 `config.yaml`의 주석 기준:

@@ -46,7 +46,9 @@ task → [고정된 subtask sequence]
 4. **네거티브는 2계층.** (a) 변환 시점에 굽는 `truncated` 네거티브(중간에서 끊고 `quality_label="failure"`,
    `partial_success=α`) + (b) 학습 시 온라인 전략(`different_task`, `rewind`, `reverse_progress`).
    같은 data_source 안에 subtask가 수백 종 섞여 있으므로 `different_task` 네거티브가 자동으로
-   "다른 subtask 지시문 + 현재 영상" 형태가 된다 — 이게 FSM 오전이(false transition) 방지에 직결된다.
+   "같은 데이터 소스의 다른 subtask 영상"을 뽑는다 — FSM 오전이(false transition) 방지에 도움이 되나,
+   영상 자체가 바뀌므로 모델이 지시문이 아니라 장면 차이로 구분할 여지가 있다. "같은 영상 + 틀린 지시문"을
+   만드는 `DIFFERENT_TASK_INSTRUCTION`은 ProgressSampler 소속이라 현재 설정에서는 쓰이지 않는다.
    → [02](02-converter-spec.md#6-네거티브-변형-생성)
 
 5. **뷰는 zed head camera RGB 단일.** `observation.rgb.zed_link_camera_0` (720×720@30fps). depth와 wrist는 1단계 제외.
