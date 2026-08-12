@@ -231,6 +231,44 @@ task-0000이 끝까지 통과한 뒤:
 
 전체 100 task 무제한 변환은 clip 약 36만 개(mp4 ~90 GB, npz ~200 GB)다. 먼저 재보고 결정할 것.
 
+## 트러블슈팅
+
+### `ImportError: cannot import name 'ScalingType' from 'torch.nn.functional'`
+
+`from transformers import ...`를 하는 모든 스크립트(변환 포함)가 죽는다. 스택은 대개
+`sentence_transformers → transformers → quantizers/auto.py → quantizer_torchao → import torchao`.
+
+**원인:** `unsloth`이 `torchao`를 상한 없이 요구해서 uv가 최신 **torchao 0.18.0**을 잡는데,
+이건 torch ≥ 2.11용이고 이 저장소는 `torch==2.8.0`을 핀한다. 같이 뜨는
+`Skipping import of cpp extensions ... Please upgrade to torch >= 2.11.0 (found 2.8.0+cu128)`가 그 증거다.
+transformers는 torchao가 **설치돼 있기만 하면** 임포트하므로
+(`if is_torchao_available(): import torchao`), 양자화를 안 써도 터진다.
+이 프로젝트는 `model.quantization: false`라 torchao가 아예 필요 없다.
+
+**즉시 우회:**
+
+```bash
+uv pip uninstall torchao
+RUN="uv run --no-sync" ./scripts/b1k_pipeline.sh convert
+```
+
+`--no-sync`가 없으면 `uv run`이 락 파일을 보고 torchao를 다시 깔아 놓는다.
+(`b1k_pipeline.sh`는 `RUN` 환경변수로 실행기를 갈아끼울 수 있다.)
+
+**영구 수정** — `pyproject.toml`의 `[tool.uv]`에 이미 넣어 뒀다:
+
+```toml
+constraint-dependencies = ["torchao<0.14"]
+```
+
+```bash
+uv lock && uv sync
+uv run python -c "import torch, transformers; print(torch.__version__, transformers.__version__)"
+```
+
+이 명령이 통과하면 해결. 여전히 같은 에러면 상한을 더 내리거나(`torchao<0.13`),
+그냥 torchao를 빼고 `--no-sync`로 가면 된다.
+
 ## 로컬(맥) 개발 참고
 
 `decord`는 macOS arm64 휠이 없다. 두 곳에 폴백을 넣어 뒀다:

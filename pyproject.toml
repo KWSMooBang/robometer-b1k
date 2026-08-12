@@ -142,6 +142,16 @@ conflicts = [
         { extra = "vlac" },
     ],
 ]
+
+# unsloth requires torchao without an upper bound, so uv resolves the newest
+# release (0.18.0), which is built for torch >= 2.11 and fails to import against
+# the torch==2.8.0 pinned above:
+#   ImportError: cannot import name 'ScalingType' from 'torch.nn.functional'
+# transformers imports torchao eagerly whenever it is installed
+# (quantizers/quantizer_torchao.py: `if is_torchao_available(): import torchao`),
+# so a broken torchao breaks every `from transformers import ...` in the repo --
+# including dataset conversion, which has nothing to do with quantization.
+constraint-dependencies = ["torchao<0.14"]
 # This section could be used for advanced features like overriding dependencies
 # from your environment if needed, similar to the 'openpi' example.
 #override-dependencies = ["av<16.0.0"]
