@@ -269,6 +269,87 @@ uv run python -c "import torch, transformers; print(torch.__version__, transform
 이 명령이 통과하면 해결. 여전히 같은 에러면 상한을 더 내리거나(`torchao<0.13`),
 그냥 torchao를 빼고 `--no-sync`로 가면 된다.
 
+### `ffmpeg: error while loading shared libraries: libvpx.so.9`
+
+`BrokenPipeError writing frame` + `❌ Error processing trajectory N`이 trajectory마다 반복된다.
+
+**원인:** ffmpeg 바이너리의 동적 링크가 깨졌다(conda/apt ffmpeg인데 libvpx가 그 밑에서 바뀐 경우가 흔하다).
+변환은 프레임을 ffmpeg stdin으로 밀어 넣어 mp4를 만들므로 **전부 실패**한다.
+
+**진단:**
+
+```bash
+which ffmpeg && ffmpeg -version
+ldd $(which ffmpeg) | grep "not found"
+```
+
+**수정** — 셋 중 하나. root가 없으면 첫 번째가 확실하다 (정적 빌드):
+
+```bash
+uv pip install imageio-ffmpeg
+export FFMPEG_BINARY=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+```
+```bash
+conda install -c conda-forge ffmpeg      # conda 환경이면
+apt-get install -y ffmpeg                # root가 있으면
+```
+
+`FFMPEG_BINARY`는 변환기가 읽는다(`dataset_upload/helpers.py:get_ffmpeg_binary`).
+변환 시작 전에 `check_ffmpeg()`가 한 번 검사하므로, 깨져 있으면 1071개를 다 돌기 전에 바로 멈춘다.
+
+### `wandb.errors.CommError: ... 403 permission denied (upsertBucket)`
+
+`config.yaml`의 `wandb_entity`가 논문 저자 엔트리티(`jesbu1`)로 하드코딩돼 있어서, 다른 계정으로는
+그 엔트리티에 run을 만들 수 없다. `wandb_entity: null`로 바꿔 뒀다 — null이면 로그인한 계정의
+기본 엔트리티(또는 `WANDB_ENTITY` 환경변수)를 쓴다.
+
+```bash
+wandb login                      # 로그인 상태 확인
+./scripts/b1k_pipeline.sh train  # 기본 엔트리티로 기록
+```
+
+팀/조직 계정에 남기려면:
+
+```bash
+WANDB_ENTITY=<your-team> ./scripts/b1k_pipeline.sh train
+```
+
+로깅을 아예 끄거나 오프라인으로 돌리려면:
+
+```bash
+WANDB=off ./scripts/b1k_pipeline.sh train      # logging.log_to=[] 로 실행
+WANDB_MODE=offline ./scripts/b1k_pipeline.sh train
+```
+
+`smoke` 단계는 원래부터 `logging.log_to=[]`라 wandb를 타지 않는다. 먼저 smoke로 학습 경로를
+검증하고 나서 `train`으로 넘어가면 이 문제에 시간을 안 뺏긴다.
+
+### 화면을 뒤덮는 warning들 — 처리 완료
+
+전부 무해하지만 실제 실패 메시지를 묻어 버리므로 출처별로 막아 뒀다.
+
+| 메시지 | 출처 | 조치 |
+|---|---|---|
+| `Unable to register cuDNN/cuBLAS factory`, `computation placer already registered`, `absl::InitializeLog` | `generate_hf_dataset.py`가 TensorFlow를 무조건 임포트했다. TF의 C++ 레이어가 뿜는 것이라 파이썬 필터로는 못 막는다 | **TF 임포트를 지연시켰다.** RLDS/TFDS 로더(OXE·SOAR·AgiBot)만 필요하고, B1K는 안 쓴다. 강제로 켜려면 `RBM_IMPORT_TF=1` |
+| `Using TRANSFORMERS_CACHE is deprecated` | 환경변수가 설정돼 있음 | `HF_HUB_CACHE`로 **값을 옮기고** 옛 이름을 지운다. 캐시 위치가 유지되므로 모델 재다운로드가 없다 |
+| `google.api_core ... Python 3.10 end of life` 등 FutureWarning | 전이 의존성 | 패턴 기반 warning 필터 |
+| sentence-transformers 다운로드 진행바 | 최초 1회 모델 다운로드 | 캐시된 뒤로는 안 뜬다 |
+| worker마다 반복 | spawn 워커가 각자 모듈을 재임포트 | 위 조치가 워커에도 그대로 적용된다 |
+
+구현은 [dataset_upload/quiet.py](../../dataset_upload/quiet.py)이며 `generate_hf_dataset.py` 최상단에서
+무거운 임포트보다 먼저 호출된다. `b1k_pipeline.sh`는 CPU만 쓰는 단계(check/convert/preview)를
+`CUDA_VISIBLE_DEVICES=`로 실행해 CUDA 등록 에러 자체를 원천 차단한다.
+
+**전부 되돌려 원래 로그를 보고 싶으면:**
+
+```bash
+RBM_VERBOSE=1 ./scripts/b1k_pipeline.sh convert
+```
+
+> 부수 변경: `TOKENIZERS_PARALLELISM`이 `true`에서 `false`로 바뀌었다. 변환기는 SentenceTransformer를
+> 쓴 뒤 프로세스 풀을 띄우므로 `true`면 fork 경고가 워커마다 뜬다. 임베딩은 이미 풀 생성 전에
+> 한 번에 계산되므로 성능 영향은 없다.
+
 ## 로컬(맥) 개발 참고
 
 `decord`는 macOS arm64 휠이 없다. 두 곳에 폴백을 넣어 뒀다:

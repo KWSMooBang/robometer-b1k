@@ -7,6 +7,7 @@ Contains utility functions for processing frames, saving images, and managing da
 import os
 import subprocess as sp
 import uuid
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -228,7 +229,7 @@ def create_trajectory_video_optimized(
     # FFmpeg command for creating a web-optimized H.264 video
     # This pipes raw video frames from stdin
     command = [
-        "ffmpeg",
+        get_ffmpeg_binary(),
         "-y",  # Overwrite output file if it exists
         "-f",
         "rawvideo",
@@ -323,6 +324,55 @@ def create_trajectory_sequence(
         frame_paths.append(saved_path)
 
     return frame_paths
+
+
+def get_ffmpeg_binary() -> str:
+    """Path to the ffmpeg executable used for encoding trajectory clips.
+
+    Override with FFMPEG_BINARY when the system ffmpeg is missing or has broken
+    shared-library links (a conda/apt ffmpeg whose libvpx was upgraded out from
+    under it is a common one). `pip install imageio-ffmpeg` ships a static build:
+
+        export FFMPEG_BINARY=$(python -c \\
+            "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+    """
+    return os.environ.get("FFMPEG_BINARY", "ffmpeg")
+
+
+def check_ffmpeg(raise_on_error: bool = True) -> Optional[str]:
+    """Verify ffmpeg actually runs before starting a long conversion.
+
+    Without this the failure only shows up as a BrokenPipeError once per
+    trajectory, after the whole dataset has been loaded and embedded.
+    Returns None when ffmpeg is fine, otherwise the error text.
+    """
+    binary = get_ffmpeg_binary()
+    try:
+        result = sp.run([binary, "-version"], capture_output=True, timeout=30)
+    except FileNotFoundError:
+        problem = f"ffmpeg not found: {binary!r} is not on PATH"
+    except Exception as exc:  # noqa: BLE001
+        problem = f"could not run {binary!r}: {exc}"
+    else:
+        if result.returncode == 0:
+            return None
+        problem = (
+            f"{binary!r} exited with {result.returncode}: "
+            f"{result.stderr.decode(errors='replace').strip().splitlines()[:2]}"
+        )
+
+    message = (
+        f"{problem}\n"
+        "Video encoding will fail for every trajectory. Fix it with one of:\n"
+        "  uv pip install imageio-ffmpeg && "
+        'export FFMPEG_BINARY=$(python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")\n'
+        "  conda install -c conda-forge ffmpeg\n"
+        "  apt-get install -y ffmpeg"
+    )
+    if raise_on_error:
+        raise RuntimeError(message)
+    print(f"⚠️  {message}")
+    return problem
 
 
 def generate_unique_id() -> str:

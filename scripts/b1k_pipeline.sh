@@ -30,23 +30,39 @@ VAL_KEY="datasets_b1k_rbm_b1k_skill_val_b1k_skill_val"
 EXP_NAME="${EXP_NAME:-rbm4b_lora_b1k_skill}"
 RUN="${RUN:-uv run}"
 
+# Quieten third-party import noise. RBM_VERBOSE=1 turns it all back on.
+export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-3}"
+export GRPC_VERBOSITY="${GRPC_VERBOSITY:-ERROR}"
+export GLOG_minloglevel="${GLOG_minloglevel:-2}"
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+# TRANSFORMERS_CACHE is deprecated; HF_HUB_CACHE is the direct replacement, so
+# carry the value over instead of losing the existing model cache.
+if [ -n "${TRANSFORMERS_CACHE:-}" ]; then
+  export HF_HUB_CACHE="${HF_HUB_CACHE:-$TRANSFORMERS_CACHE}"
+  unset TRANSFORMERS_CACHE
+fi
+
+# Conversion, preview and (with precompute_embeddings=false) preprocessing are
+# CPU-only. Hiding the GPUs stops CUDA/cuDNN registration errors at the source.
+cpu_only() { CUDA_VISIBLE_DEVICES="" "$@"; }
+
 stage="${1:-}"
 
 banner() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
 
 do_check() {
   banner "availability + invariants"
-  $RUN python scripts/b1k_check_alignment.py "$B1K_ROOT" --ready-only
+  cpu_only $RUN python scripts/b1k_check_alignment.py "$B1K_ROOT" --ready-only
 }
 
 do_convert() {
   banner "convert TRAIN split"
-  $RUN python -m dataset_upload.generate_hf_dataset \
+  cpu_only $RUN python -m dataset_upload.generate_hf_dataset \
     --config_path dataset_upload/configs/data_gen_configs/b1k_skill.yaml \
     --dataset.dataset_path="$B1K_ROOT"
 
   banner "convert VAL split"
-  $RUN python -m dataset_upload.generate_hf_dataset \
+  cpu_only $RUN python -m dataset_upload.generate_hf_dataset \
     --config_path dataset_upload/configs/data_gen_configs/b1k_skill_val.yaml \
     --dataset.dataset_path="$B1K_ROOT"
 
@@ -56,7 +72,7 @@ do_convert() {
 
 do_preview() {
   banner "contact sheet"
-  $RUN python scripts/b1k_preview_segments.py "$B1K_ROOT" \
+  cpu_only $RUN python scripts/b1k_preview_segments.py "$B1K_ROOT" \
     -o datasets/b1k_rbm/preview.png --rows 12 --truncated-ratio 0.5
   echo "open datasets/b1k_rbm/preview.png -- the LAST frame of each positive row"
   echo "must show that subtask completed, and truncated rows must not."
@@ -115,13 +131,21 @@ do_smoke() {
 
 do_train() {
   banner "training: $EXP_NAME"
-  # shellcheck disable=SC2046
+  # WANDB=off skips logging entirely; WANDB_ENTITY picks the team/user to log
+  # under (unset = the logged-in account's default entity).
+  local log_args="logging.log_to=[wandb]"
+  if [ "${WANDB:-on}" = "off" ]; then
+    log_args="logging.log_to=[]"
+  elif [ -n "${WANDB_ENTITY:-}" ]; then
+    log_args="$log_args logging.wandb_entity=$WANDB_ENTITY"
+  fi
+  # shellcheck disable=SC2046,SC2086
   $RUN python train.py $(train_args) \
     training.max_steps="${MAX_STEPS:-1000}" \
     training.eval_steps=50 \
     training.custom_eval_steps=50 \
     training.exp_name="$EXP_NAME" \
-    logging.log_to=[wandb] \
+    $log_args \
     logging.save_best.metric_names=[eval_rew_align/pearson_b1k_skill_val,eval_p_rank/kendall_last_b1k_skill_val] \
     logging.save_best.greater_is_better=[true,true]
 }

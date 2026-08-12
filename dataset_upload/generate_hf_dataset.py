@@ -6,7 +6,12 @@ This is a generic converter that works with any dataset-specific loader.
 
 import os
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # hide INFO/WARN/ERROR; only FATAL remains
+# Must run before the heavy imports below (and re-runs in every pool worker,
+# since spawn re-imports this module). RBM_VERBOSE=1 disables it.
+from dataset_upload.quiet import quiet_imports, should_import_tensorflow
+
+quiet_imports()
+
 import multiprocessing as mp
 
 import numpy as np
@@ -24,6 +29,7 @@ from datasets import Dataset
 
 # from robometer.data.dataset_types import Trajectory  # not needed, just type hint
 from dataset_upload.helpers import (
+    check_ffmpeg,
     create_hf_trajectory,
     create_output_directory,
     flatten_task_data,
@@ -38,14 +44,22 @@ try:
     absl_logging.set_verbosity(absl_logging.ERROR)
 except Exception:
     pass
-try:
-    import tensorflow as tf
 
-    tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-except Exception:
-    pass
+# Importing TensorFlow costs several seconds and prints cuDNN/cuBLAS/computation
+# placer errors from its C++ layer -- once per pool worker -- that no Python-side
+# filter can suppress. Only the RLDS/TFDS loaders need it, so import it lazily.
+# RBM_IMPORT_TF=1 forces it on.
+_TF_IMPORTED = False
+if should_import_tensorflow():
+    try:
+        import tensorflow as tf
 
-os.environ["TOKENIZERS_PARALLELISM"] = "true"
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+        _TF_IMPORTED = True
+    except Exception:
+        pass
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def push_hf_dataset_and_video_files_to_hub(dataset, hub_repo_id, hub_token, dataset_name, output_dir):
@@ -240,6 +254,11 @@ def convert_dataset_to_hf_format(
 
     print(f"Converting {dataset_name} dataset to HuggingFace format...")
 
+    # Fail fast: a broken ffmpeg otherwise surfaces as a BrokenPipeError once per
+    # trajectory, after the whole dataset has been loaded and embedded.
+    if use_video:
+        check_ffmpeg()
+
     # Create output directory
     create_output_directory(output_dir)
 
@@ -427,6 +446,15 @@ def convert_dataset_to_hf_format(
 @wrap()
 def main(cfg: GenerateConfig):
     """Main function to convert any dataset to HuggingFace format."""
+
+    # TensorFlow is no longer imported by default (see dataset_upload/quiet.py).
+    # The RLDS/TFDS loaders still import it themselves, but without the early
+    # verbosity setup they get noisier -- point that out rather than surprise.
+    if not _TF_IMPORTED and should_import_tensorflow(cfg.dataset.dataset_name):
+        print(
+            f"ℹ️  {cfg.dataset.dataset_name} looks TFDS-backed; "
+            "set RBM_IMPORT_TF=1 to configure TensorFlow logging up front."
+        )
 
     # Get hub token from environment if not provided
     if cfg.hub.hub_token is None:

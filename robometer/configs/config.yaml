@@ -227,7 +227,10 @@ logging:
   save_processor: true
   log_to: [wandb]
   wandb_project: "robometer"
-  wandb_entity: jesbu1
+  # null = whichever entity the logged-in wandb account defaults to, or the
+  # WANDB_ENTITY env var. Hardcoding someone else's entity here gives every
+  # other user a 403 "permission denied" on upsertBucket at wandb.init.
+  wandb_entity: null
   wandb_notes: "training Robometer"
   
   # SaveBestCallback configuration
