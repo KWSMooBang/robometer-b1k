@@ -14,6 +14,8 @@ class BaseCollator:
         resized_width: int = 128,
         base_model_id: str = None,
         load_embeddings: bool = False,
+        max_image_side: int = 480,
+        max_image_pixels: int = 1024 * 1024,
         **kwargs,
     ):
         self.processor = processor
@@ -24,6 +26,11 @@ class BaseCollator:
         self.tokenizer = tokenizer
         self.base_model_id = base_model_id
         self.load_embeddings = load_embeddings
+        # Ceiling applied when resized_height/width are not set. Frames larger
+        # than this are shrunk before they reach the processor, so a run on a
+        # 720px cache needs these raised to match.
+        self.max_image_side = max_image_side
+        self.max_image_pixels = max_image_pixels
 
         # Update processor based on base model id
         # if "SmolVLM" in self.base_model_id:

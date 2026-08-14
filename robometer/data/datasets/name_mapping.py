@@ -93,12 +93,19 @@ DS_SHORT_NAME_MAPPING = {
     "abraranwar_usc_koch_rewind_rfm_usc_koch_rewind": "usc_koch_rewind",
     # RoboFAC
     "aliangdw_robofac_rbm_robofac": "robofac",
-    # BEHAVIOR-1K (subtask/skill segments)
-    # Cache keys are "<preprocess dataset_path>/<subset>" with "/" -> "_".
-    # Local (converter output, no Hub round-trip):
-    "datasets_b1k_rbm_b1k_skill_train_b1k_skill_train": "b1k_skill",
-    "datasets_b1k_rbm_b1k_skill_val_b1k_skill_val": "b1k_skill_val",
-    # If you push to the Hub instead, add your own:
+    # BEHAVIOR-1K entries are appended below from b1k_variants, one pair per
+    # resolution. If you push to the Hub instead of using the local converter
+    # output, add your own:
     #   "<HF_USERNAME>_b1k_rbm_b1k_skill_train": "b1k_skill",
     #   "<HF_USERNAME>_b1k_rbm_b1k_skill_val": "b1k_skill_val",
 }
+
+# BEHAVIOR-1K (subtask/skill segments), every supported resolution.
+# Cache keys are "<preprocess dataset_path>/<subset>" with "/" -> "_", e.g.
+#   240 : datasets_b1k_rbm_b1k_skill_train_b1k_skill_train
+#   480 : datasets_b1k_rbm_480_b1k_skill_train_b1k_skill_train
+# All resolutions map to the same short name so eval metric keys stay comparable
+# across runs; see robometer/data/b1k_variants.py.
+from robometer.data.b1k_variants import short_name_entries as _b1k_short_names  # noqa: E402
+
+DS_SHORT_NAME_MAPPING.update(_b1k_short_names())

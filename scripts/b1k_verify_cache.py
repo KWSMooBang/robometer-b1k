@@ -39,6 +39,12 @@ def main() -> int:
     ap.add_argument("cache_key", nargs="?", help="cache directory name under the processed datasets path")
     ap.add_argument("--max-frames", type=int, default=8)
     ap.add_argument(
+        "--expect-resolution",
+        type=int,
+        default=None,
+        help="assert the cached frames have this shortest edge (e.g. 240, 480, 720)",
+    )
+    ap.add_argument(
         "--cutoff-file", default="robometer/data/dataset_success_cutoff.txt"
     )
     args = ap.parse_args()
@@ -119,6 +125,19 @@ def main() -> int:
             problems += 1
         else:
             ok("frames decode as (T, H, W, 3) uint8")
+            # A resolution mismatch here means the cache was built from clips of a
+            # different resolution than the run intends -- the cache key and the
+            # pixels disagree, and nothing downstream would notice.
+            if args.expect_resolution is not None:
+                height, width = int(sample.shape[1]), int(sample.shape[2])
+                if min(height, width) != args.expect_resolution:
+                    fail(
+                        f"expected shortest edge {args.expect_resolution}, cache holds {width}x{height}. "
+                        f"Reconvert at that resolution or point at the matching cache key."
+                    )
+                    problems += 1
+                else:
+                    ok(f"frame resolution {width}x{height}")
     else:
         fail("no npz frames in cache")
         problems += 1

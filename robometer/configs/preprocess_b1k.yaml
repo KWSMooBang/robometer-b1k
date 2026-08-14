@@ -19,6 +19,16 @@
 #     train_datasets: ["<user>/b1k_rbm"]
 #     train_subsets:  [["b1k_skill_train"]]
 #
+# Resolution. The paths below are the 240 conversion. Higher resolutions live in
+# their own directory and therefore their own cache, and the driver script
+# overrides the paths rather than duplicating this file:
+#
+#     RES=480 ./scripts/b1k_pipeline.sh preprocess
+#     # -> --train_datasets=[datasets/b1k_rbm_480/b1k_skill_train]
+#
+# Run `./scripts/b1k_pipeline.sh names` (with RES set) to see the paths and the
+# cache keys a resolution resolves to; they come from robometer/data/b1k_variants.py.
+#
 # See docs/b1k/03-preprocess-train-spec.md.
 
 train_datasets:

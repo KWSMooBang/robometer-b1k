@@ -17,10 +17,18 @@ from robometer.data.dataset_category import is_preference_only_ds
 from robometer.data.datasets.helpers import DataGenStrat
 from typing import List, Dict, Union
 from robometer.models.utils import convert_discrete_target_to_continuous
+from robometer.utils.logger import get_logger
 from PIL import Image
+
+logger = get_logger()
 
 MAX_IMAGE_SIDE = 480  # bigger side
 MAX_IMAGE_PIXELS = 1024 * 1024  # safety cap (1.0 MP). raise to 1.5MP if stable
+
+# A cap that silently shrinks frames is the kind of bug that passes every numeric
+# check while changing what the model sees, so say it out loud -- once, not once
+# per frame.
+_WARNED_DOWNSCALES: set[tuple[int, int, int, int]] = set()
 
 
 def _resize_pil(pil: Image.Image, max_side: int = MAX_IMAGE_SIDE, max_pixels: int = MAX_IMAGE_PIXELS) -> Image.Image:
@@ -37,6 +45,14 @@ def _resize_pil(pil: Image.Image, max_side: int = MAX_IMAGE_SIDE, max_pixels: in
 
     if scale < 1.0:
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+        key = (w, h, nw, nh)
+        if key not in _WARNED_DOWNSCALES:
+            _WARNED_DOWNSCALES.add(key)
+            logger.warning(
+                f"Frames are being downscaled {w}x{h} -> {nw}x{nh} by the collator cap "
+                f"(data.max_image_side={max_side}, data.max_image_pixels={max_pixels}). "
+                "Raise those to train at the resolution the cache actually holds."
+            )
         pil = pil.resize((nw, nh), resample=Image.BICUBIC)
 
     return pil
@@ -137,6 +153,8 @@ class RBMBatchCollator(BaseCollator):
         use_per_frame_progress_token: bool = False,
         shuffle_progress_frames: bool = False,
         inference: bool = False,
+        max_image_side: int = MAX_IMAGE_SIDE,
+        max_image_pixels: int = MAX_IMAGE_PIXELS,
         **kwargs,
     ):
         super().__init__(
@@ -147,6 +165,8 @@ class RBMBatchCollator(BaseCollator):
             resized_width=resized_width,
             base_model_id=base_model_id,
             load_embeddings=load_embeddings,
+            max_image_side=max_image_side,
+            max_image_pixels=max_image_pixels,
             **kwargs,
         )
         self.use_multi_image = use_multi_image
@@ -168,6 +188,26 @@ class RBMBatchCollator(BaseCollator):
         self.shuffle_progress_frames = shuffle_progress_frames
         self.inference = inference
 
+    def _cap_frame(self, frame: Image.Image) -> Image.Image:
+        """Shrink a frame to the configured ceiling, leaving smaller ones alone."""
+        return _resize_pil(frame, max_side=self.max_image_side, max_pixels=self.max_image_pixels)
+
+    def _apply_frame_resolution(self, frames: List) -> tuple[List, dict]:
+        """Decide the resolution frames reach the processor at.
+
+        Two mutually exclusive routes:
+          * resized_height/width set -> hand the target to qwen_vl_utils, which
+            resizes to it (rounded to the patch grid). Nothing is capped.
+          * unset -> keep the cache's own resolution, bounded by max_image_side /
+            max_image_pixels.
+        """
+        if self.resized_height is not None and self.resized_width is not None:
+            return frames, {
+                "resized_height": self.resized_height,
+                "resized_width": self.resized_width,
+            }
+        return [self._cap_frame(frame) for frame in frames], {}
+
     def _prepare_frames_for_conversation(self, frames: List, prefix: str = "tmp") -> tuple[Union[List, str], dict]:
         """
         Prepare frames for conversation based on use_multi_image flag.
@@ -182,30 +222,17 @@ class RBMBatchCollator(BaseCollator):
                 - content_extras: Dictionary with resized_height/width or empty dict
         """
         if self.use_multi_image:
-            # # Use images directly - return list of PIL Images
-            # if self.resized_height is not None and self.resized_width is not None:
-            #     content_extras = {
-            #         "resized_height": self.resized_height,
-            #         "resized_width": self.resized_width,
-            #     }
-            # else:
-            #     frames = [_resize_pil(frame) for frame in frames]
-            #     content_extras = {}
-            content_extras = {}
-            return frames, content_extras
+            # Use images directly - return list of PIL Images.
+            # resized_height/width win when set: qwen_vl_utils then resizes each
+            # frame to exactly that, which is how a run trains at a resolution
+            # other than the one the npz cache holds (e.g. a 720 cache evaluated
+            # at 480 without reconverting). Otherwise fall back to the cap.
+            return self._apply_frame_resolution(frames)
         elif "Qwen" in self.base_model_id or "Molmo" in self.base_model_id:
             # Qwen and Molmo accept list of PIL Images directly
-            if self.resized_height is not None and self.resized_width is not None:
-                content_extras = {
-                    "resized_height": self.resized_height,
-                    "resized_width": self.resized_width,
-                }
-            else:
-                frames = [_resize_pil(frame) for frame in frames]
-                content_extras = {}
-            return frames, content_extras
+            return self._apply_frame_resolution(frames)
         elif "SmolVLM" in self.base_model_id:
-            frames = [_resize_pil(frame) for frame in frames]
+            frames = [self._cap_frame(frame) for frame in frames]
             # Convert to video file for SmolVLM
             unique_id = uuid.uuid4().hex
             tmp = Path(tempfile.gettempdir()) / f"{prefix}_{unique_id}.mp4"

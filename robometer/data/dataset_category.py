@@ -88,13 +88,10 @@ DATASET_CATEGORY = {
 }
 
 DATASET_MAP = {
-    # BEHAVIOR-1K subtask segments. Deliberately absent from DATA_SOURCE_CATEGORY:
-    # successful and failure rows are mixed inside one data_source and are already
-    # separated per row by quality_label.
-    "b1k": {
-        "train": ["datasets_b1k_rbm_b1k_skill_train_b1k_skill_train"],
-        "eval": ["datasets_b1k_rbm_b1k_skill_val_b1k_skill_val"],
-    },
+    # BEHAVIOR-1K subtask segments, one entry per resolution ("b1k" = 240,
+    # "b1k_480", "b1k_720"), filled in from b1k_variants below. Deliberately
+    # absent from DATA_SOURCE_CATEGORY: successful and failure rows are mixed
+    # inside one data_source and are already separated per row by quality_label.
     "others": {
         "train": [
             "jesbu1_molmoact_rfm_molmoact_dataset_household",
@@ -429,6 +426,12 @@ DATASET_MAP = {
         ],
     },
 }
+
+# "b1k" (240), "b1k_480", "b1k_720". Registered from one place so the cache keys
+# here cannot drift from the ones preprocessing writes; see b1k_variants.py.
+from robometer.data.b1k_variants import dataset_map_entries as _b1k_dataset_map  # noqa: E402
+
+DATASET_MAP.update(_b1k_dataset_map())
 
 
 DATA_SOURCE_CATEGORY = {

@@ -1394,6 +1394,8 @@ def setup_batch_collator(
         "processor": processor,
         "resized_height": cfg.data.resized_height,
         "resized_width": cfg.data.resized_width,
+        "max_image_side": getattr(cfg.data, "max_image_side", 480),
+        "max_image_pixels": getattr(cfg.data, "max_image_pixels", 1024 * 1024),
         "base_model_id": cfg.model.base_model_id,
         "use_multi_image": cfg.data.use_multi_image,
         "prog_pref": cfg.training.predict_pref_progress,

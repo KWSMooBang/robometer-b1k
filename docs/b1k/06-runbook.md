@@ -32,6 +32,33 @@ export HF_TOKEN=...            # Hub에 올릴 때만 필요
 `./scripts/b1k_pipeline.sh all`은 1~5를 이어서 돌리고 **학습 직전에 멈춘다**(3번을 사람이 봐야 하므로).
 아래는 각 단계가 실제로 실행하는 명령과 확인할 것.
 
+### 해상도
+
+기본은 240이다. `RES`로 바꾸면 변환 디렉터리, npz 캐시 키, `DATASET_MAP` 항목, 실험 이름,
+기본 배치까지 전부 따라간다:
+
+```bash
+RES=480 ./scripts/b1k_pipeline.sh all
+RES=480 ./scripts/b1k_pipeline.sh smoke
+```
+
+```bash
+./scripts/b1k_pipeline.sh names          # 240이 풀리는 이름들
+RES=720 ./scripts/b1k_pipeline.sh names  # 720이 풀리는 이름들
+```
+
+주의할 점 세 가지:
+
+- **단계마다 같은 `RES`를 줘야 한다.** `RES=480 ... convert` 후 `RES` 없이 `preprocess`를 돌리면
+  240 경로를 읽는다. 학습 전 `require_cache`가 잡아주지만, preprocess 시간은 이미 버린 뒤다.
+- **해상도끼리 디렉터리를 섞지 말 것.** 변환기는 mp4가 이미 있으면 건너뛰므로, 같은 디렉터리에
+  다시 변환하면 이전 해상도 클립이 살아남는다. 변환 직후 `b1k_check_clip_resolution.py`가
+  실제 mp4 크기를 확인하고 섞여 있으면 실패시킨다.
+- **720은 704로 반올림된다.** Qwen3-VL이 32의 배수로 맞추기 때문이다. 720급이 필요하면
+  `RES=704`가 저장 낭비가 없다. 스크립트가 경고한다.
+
+npz 용량은 해상도 제곱에 비례한다 — 240 대비 480은 4배, 720은 9배다. 디스크부터 확인할 것.
+
 ---
 
 ## 1. 무엇을 변환할 수 있는가
@@ -75,12 +102,20 @@ uv run python -m dataset_upload.generate_hf_dataset \
 산출물:
 
 ```
-datasets/b1k_rbm/
+datasets/b1k_rbm/                             # RES=480이면 datasets/b1k_rbm_480/
 ├── b1k_skill_train/                          # HF Dataset (save_to_disk)
 │   └── batch_0000/trajectory_XXXX.mp4        # 240x240, 64 frames
 ├── b1k_skill_val/
 └── b1k_skill_train_conversion_report.json
 ```
+
+**확인 (클립 해상도):** 변환 단계가 자동으로 돌린다. 따로 확인하려면
+
+```bash
+uv run python scripts/b1k_check_clip_resolution.py datasets/b1k_rbm --expect 240
+```
+
+크기가 두 종류 이상 나오면 한 디렉터리에 두 번 변환한 것이다 — 지우고 다시 변환할 것.
 
 **확인 (`*_conversion_report.json`):**
 - `segments_kept + Σsegments_dropped == segments_total` (로더가 런타임에 assert한다)

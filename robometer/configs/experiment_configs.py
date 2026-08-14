@@ -145,6 +145,18 @@ class DataConfig:
     )
     resized_height: Optional[int] = field(default=None, metadata={"help": "Height to resize video frames to"})
     resized_width: Optional[int] = field(default=None, metadata={"help": "Width to resize video frames to"})
+    max_image_side: int = field(
+        default=480,
+        metadata={
+            "help": "Longest side a frame may reach the processor at when resized_height/width are unset. "
+            "Frames above it are downscaled by the collator, so training on a 480 or 720 cache "
+            "requires raising this or the extra pixels are thrown away."
+        },
+    )
+    max_image_pixels: int = field(
+        default=1024 * 1024,
+        metadata={"help": "Per-frame pixel ceiling paired with max_image_side (area cap)"},
+    )
 
     # Video/image processing mode
     use_multi_image: bool = field(

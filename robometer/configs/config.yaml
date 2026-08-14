@@ -75,8 +75,13 @@ data:
   # Video processing settings
   max_frames_after_preprocessing: 64
   max_frames: 16  # Maximum frames per trajectory
-  resized_height: null # Height to resize images/videos to
+  resized_height: null # Height to resize images/videos to. When set, frames are resized to exactly this and no cap applies.
   resized_width: null   # Width to resize images/videos to
+  # Ceiling used when resized_height/width are null. 480/1MP keeps the historical
+  # behaviour for 240px caches; a 480 or 720 cache needs this raised to match, or
+  # the collator quietly discards the extra pixels (it logs a warning when it does).
+  max_image_side: 480
+  max_image_pixels: 1048576
   load_embeddings: false
   min_frames_per_trajectory: 5 # Minimum number of frames required per trajectory (trajectories with fewer frames will be filtered out)
   use_multi_image: true # If True, feed frames as a list of images instead of converting to video (avoids encoding overhead)

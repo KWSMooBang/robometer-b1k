@@ -43,6 +43,11 @@ output:
   max_frames: 64
   use_video: true
   fps: 30
+  # 240 is what the repo's other data_gen configs use and what Robometer-4B's
+  # RBM-1M pretraining ran at. To convert at another resolution, override both
+  # of these together -- the converter skips clips whose mp4 already exists, so
+  # two resolutions in one output_dir leave the first one's clips in place:
+  #   RES=480 ./scripts/b1k_pipeline.sh convert
   shortest_edge_size: 240
   center_crop: false
   # Segments are read from 46-minute aggregated mp4s, so decoder seek locality

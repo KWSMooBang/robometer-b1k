@@ -35,6 +35,7 @@ output:
   max_frames: 64
   use_video: true
   fps: 30
+  # Must match the train split's resolution; the driver overrides both together.
   shortest_edge_size: 240
   center_crop: false
   num_workers: 8
