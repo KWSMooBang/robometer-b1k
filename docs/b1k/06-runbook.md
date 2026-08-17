@@ -239,6 +239,37 @@ uv run accelerate launch --config_file robometer/configs/distributed/fsdp.yaml \
 베이스라인 2개도 같은 val로 반드시 측정할 것 ([03 §5.4](03-preprocess-train-spec.md#54-베이스라인-비교용-필수)):
 Robometer-4B zero-shot, base Qwen3-VL + LoRA.
 
+### 7.1 끊긴 학습 이어서 하기
+
+체크포인트는 `SAVE_STEPS`(기본 100) 스텝마다 `./logs/<exp_name>/`에 쌓인다.
+
+```bash
+./scripts/b1k_pipeline.sh checkpoints        # 재개 가능한 것 목록
+RESUME=auto ./scripts/b1k_pipeline.sh train  # 최신 체크포인트에서 재개
+RESUME=./logs/rbm4b_lora_b1k_skill/checkpoint-400 ./scripts/b1k_pipeline.sh train
+```
+
+재개 시 `resume_from_checkpoint`이 들어가고 `load_from_checkpoint`은 **빠진다** —
+둘 다 주면 [train.py:93](../../train.py:93)의 `or`가 후자를 무시해서 step 0부터 다시 시작한다.
+
+| 체크포인트 | 출처 | 재개 품질 |
+|---|---|---|
+| `checkpoint-<step>/` | HF Trainer (`save_strategy=steps`) | optimizer·scheduler 포함, 완전 재개 |
+| `ckpt-latest-*`, `ckpt-best-*` | SaveBestCallback | optimizer 없음 → moment 초기화 |
+
+`SAVE_STEPS`는 eval 주기(train 50)의 배수로 둘 것. `SAVE_STEPS=0`이면 중간 저장이 꺼지고
+예전 동작(끝날 때 한 번만 저장)으로 돌아간다.
+
+멀티 GPU에서 `accelerate launch`로 직접 돌린다면 인자를 직접 줘야 한다:
+
+```bash
+training.resume_from_checkpoint=/abs/path/to/checkpoint-400 \
+training.overwrite_output_dir=false
+```
+
+경로는 **절대경로**로. `resolve_checkpoint_path()`가 `/`를 포함한 상대경로를 Hub repo id로
+해석한다 (디렉터리가 실제로 존재하면 로컬로 처리하지만, 절대경로가 확실하다).
+
 ---
 
 ## Hub 경유로 갈 경우

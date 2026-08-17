@@ -375,7 +375,42 @@ export ROBOMETER_PROCESSED_DATASETS_PATH=$PWD/processed_datasets
 `all`은 check~verify를 이어서 돌리고 **학습 직전에 멈춘다**(preview를 사람이 봐야 하므로).
 
 옵션: `RES=480` / `WANDB=off` / `WANDB_ENTITY=<team>` / `MAX_STEPS=2000` / `BATCH_SIZE=4` /
-`EXP_NAME=...` / `RBM_VERBOSE=1`
+`SAVE_STEPS=100` / `RESUME=auto` / `EXP_NAME=...` / `RBM_VERBOSE=1`
+
+### A.2.1 학습이 끊겼을 때 이어서 하기
+
+```bash
+./scripts/b1k_pipeline.sh checkpoints        # 뭘로 재개할 수 있는지 확인
+RESUME=auto ./scripts/b1k_pipeline.sh train  # 가장 최근 체크포인트에서 재개
+RESUME=./logs/<exp>/checkpoint-400 ./scripts/b1k_pipeline.sh train
+```
+
+재개하면 **step 카운터 + LR 스케줄 + optimizer 상태 + 데이터셋 샘플링 난수**가 복원된다.
+마지막 항목이 이 리포에서 특히 중요한데, rewind/suboptimal 전략 추첨이 거기 걸려 있다
+([train.py:319](train.py:319)).
+
+**체크포인트 두 종류를 구분할 것:**
+
+| | 내용 | 재개 |
+|---|---|---|
+| `checkpoint-<step>/` (HF Trainer) | 가중치 + `optimizer.pt` + `scheduler.pt` | 완전 재개 |
+| `ckpt-latest-*` / `ckpt-best-*` (SaveBestCallback) | 가중치 + `trainer_state.json` | step·데이터 순서만, **optimizer는 초기화** |
+
+`RESUME=auto`는 앞쪽을 우선 고르고, 없으면 뒤쪽으로 폴백하면서 어느 쪽인지 알려준다.
+배포용 가중치는 `ckpt-best-*`를 쓰고, `checkpoint-*`는 재개 전용으로 볼 것.
+
+**기본값이 바뀌었다.** `config.yaml`은 `save_strategy: "no"`라 중간 체크포인트가 아예 안 생겼다.
+파이프라인이 이제 `SAVE_STEPS`(기본 100)로 `save_strategy=steps`를 켠다. `save_total_limit=2`가
+[setup_utils.py:1309](robometer/utils/setup_utils.py:1309)에 하드코딩돼 있어 디스크는 안 터진다.
+끄려면 `SAVE_STEPS=0`.
+
+`SAVE_STEPS`는 eval 주기(train 50 / smoke 10)의 배수여야 `ckpt-latest-*`도 같이 생긴다 —
+`SaveBestCallback`이 `on_evaluate`에서만 저장하기 때문. 어긋나면 스크립트가 경고한다.
+
+> **`overwrite_output_dir` 함정 (수정됨).** `train.py`는 `output_dir`이 이미 있으면
+> 지우거나(`True`) 에러를 냈다(`False`). 체크포인트는 바로 그 디렉터리 안에 있으므로
+> **재개 대상을 읽기 전에 지워버리는** 구조였다. 이제 `resume_from_checkpoint`이 설정돼 있으면
+> 디렉터리를 보존한다. `wandb_info.json`도 살아남아서 같은 wandb 런으로 이어진다.
 
 `RES`는 모든 단계에 적용된다 (§3.7). 단계마다 같은 값을 줘야 한다 —
 `RES=480 ./scripts/b1k_pipeline.sh convert` 후 `RES` 없이 `preprocess`를 돌리면 240 캐시를 찾는다.

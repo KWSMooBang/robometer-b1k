@@ -15,6 +15,17 @@
 #   ./scripts/b1k_pipeline.sh train      # the real run
 #   ./scripts/b1k_pipeline.sh all        # check -> verify (stops before training)
 #   ./scripts/b1k_pipeline.sh names      # the names this resolution resolves to
+#   ./scripts/b1k_pipeline.sh checkpoints# what this run can be resumed from
+#
+# Interrupted run? Continue it:
+#
+#   RESUME=auto ./scripts/b1k_pipeline.sh train          # newest checkpoint
+#   RESUME=./logs/<exp>/checkpoint-400 ... train         # a specific one
+#
+# Checkpoints are written every SAVE_STEPS steps (default 100, SAVE_STEPS=0 to
+# disable). Resuming restores the step counter, the LR schedule, the optimizer
+# state and the dataset sampling RNG -- but only from a checkpoint-<step>
+# directory; a ckpt-* directory from SaveBestCallback carries no optimizer state.
 #
 # Must be run from the repo root: the relative output path decides the cache key
 # that name_mapping.py and DATASET_MAP are registered against.
@@ -42,6 +53,15 @@ export ROBOMETER_PROCESSED_DATASETS_PATH
 RES="${RES:-240}"
 EXP_NAME="${EXP_NAME:-rbm4b_lora_b1k_skill}"
 RUN="${RUN:-uv run}"
+
+# Periodic checkpoints, so an interrupted run can be continued. config.yaml ships
+# save_strategy="no", which means the only mid-run saves come from SaveBestCallback
+# (weights + trainer_state.json, no optimizer state) and only every save_best.save_every
+# steps. save_strategy=steps makes the HF Trainer write checkpoint-<step>/ with
+# optimizer.pt and scheduler.pt, which is what a true resume needs.
+# save_total_limit=2 is hardcoded in setup_utils.py, so disk stays bounded.
+# SAVE_STEPS=0 turns this off and restores the old behaviour.
+SAVE_STEPS="${SAVE_STEPS:-100}"
 
 # Quieten third-party import noise. RBM_VERBOSE=1 turns it all back on.
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-3}"
@@ -87,6 +107,81 @@ DEFAULT_BATCH_SIZE=$(( 8 * 240 * 240 / (RES * RES) ))
 if [ "$DEFAULT_BATCH_SIZE" -lt 1 ]; then
   DEFAULT_BATCH_SIZE=1
 fi
+
+# Newest resumable checkpoint under a run directory, or empty.
+#
+# Prefer the HF Trainer's own checkpoint-<step> directories: those carry
+# optimizer.pt and scheduler.pt, so the optimizer moments and LR schedule survive
+# the restart. SaveBestCallback's ckpt-* directories only hold weights plus
+# trainer_state.json, so resuming from one rewinds to the right step with a fresh
+# optimizer -- usable, but second choice.
+latest_checkpoint() {
+  local RUN_DIR="$1"
+  local newest="" newest_step=-1 step
+  for dir in "$RUN_DIR"/checkpoint-*; do
+    [ -d "$dir" ] || continue
+    step="${dir##*/checkpoint-}"
+    case "$step" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if [ "$step" -gt "$newest_step" ]; then
+      newest_step="$step"
+      newest="$dir"
+    fi
+  done
+  if [ -n "$newest" ]; then
+    printf '%s' "$newest"
+    return 0
+  fi
+
+  for dir in "$RUN_DIR"/ckpt-latest-*step=*; do
+    [ -d "$dir" ] || continue
+    step="${dir##*step=}"
+    case "$step" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if [ "$step" -gt "$newest_step" ]; then
+      newest_step="$step"
+      newest="$dir"
+    fi
+  done
+  printf '%s' "$newest"
+}
+
+# RESUME=auto picks the newest checkpoint for the run being started; RESUME=<path>
+# uses one explicitly. Called with the experiment name because `smoke` and `train`
+# write to different directories (train.py joins training.output_dir with it).
+RESUME_PATH=""
+resolve_resume() {
+  local exp_name="$1"
+  local run_dir="$PWD/logs/$exp_name"
+  RESUME_PATH=""
+  [ -n "${RESUME:-}" ] || return 0
+
+  if [ "$RESUME" = "auto" ]; then
+    RESUME_PATH="$(latest_checkpoint "$run_dir")"
+    if [ -z "$RESUME_PATH" ]; then
+      echo "  ❌ RESUME=auto found no checkpoint under $run_dir" >&2
+      echo "     Checkpoints appear once training passes SAVE_STEPS=$SAVE_STEPS steps." >&2
+      echo "     Existing entries:" >&2
+      ls -1 "$run_dir" 2>/dev/null | sed 's/^/       /' >&2 || echo "       (no such directory)" >&2
+      exit 1
+    fi
+  else
+    RESUME_PATH="$RESUME"
+    if [ ! -d "$RESUME_PATH" ]; then
+      echo "  ❌ RESUME=$RESUME_PATH is not a directory" >&2
+      exit 1
+    fi
+    # resolve_checkpoint_path() reads a bare relative path containing "/" as a
+    # Hub repo id, so hand it an absolute one.
+    case "$RESUME_PATH" in
+      /*) ;;
+      *) RESUME_PATH="$PWD/${RESUME_PATH#./}" ;;
+    esac
+  fi
+  printf '\033[2mresuming from %s\033[0m\n' "$RESUME_PATH"
+}
 
 res_banner() {
   printf '\033[2mres %s -> %s | cache %s | DATASET_MAP[%s]\033[0m\n' \
@@ -250,17 +345,45 @@ data.max_image_pixels=$(( RES * RES ))
 data.traj_same_source_prob=0.8
 data.dataset_preference_ratio=0.3
 data.predict_last_frame_partial_progress=true
-training.load_from_checkpoint=robometer/Robometer-4B
 training.per_device_train_batch_size=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
 training.learning_rate=2e-5
 training.warmup_ratio=0.1
 training.weight_decay=0.01
 training.output_dir=./logs
-training.overwrite_output_dir=True
 custom_eval.eval_types=[reward_alignment,policy_ranking]
 custom_eval.reward_alignment=[$B1K_MAP_KEY]
 custom_eval.policy_ranking=[$B1K_MAP_KEY]
+$(checkpoint_args)
 EOF
+}
+
+# Checkpointing and resume, which have to be decided together.
+#
+# Fresh run: load the pretrained weights, allow the output directory to be
+# recreated, and write periodic checkpoints.
+#
+# Resume: pass resume_from_checkpoint instead of load_from_checkpoint (train.py
+# prefers load_from_checkpoint when both are set, and that path restores weights
+# only -- the step counter and dataset RNG state would reset). overwrite_output_dir
+# must not be true either; train.py keeps the directory while resuming, but saying
+# "overwrite" in a resume command is asking for the checkpoint to be deleted the
+# next time someone reads this script.
+checkpoint_args() {
+  if [ -n "$RESUME_PATH" ]; then
+    echo "training.resume_from_checkpoint=$RESUME_PATH"
+    echo "training.overwrite_output_dir=False"
+  else
+    echo "training.load_from_checkpoint=robometer/Robometer-4B"
+    echo "training.overwrite_output_dir=True"
+  fi
+
+  if [ "$SAVE_STEPS" != "0" ]; then
+    echo "training.save_strategy=steps"
+    echo "training.save_steps=$SAVE_STEPS"
+    # SaveBestCallback only saves inside on_evaluate, so its interval has to be a
+    # multiple of the eval cadence (50 below) or it never fires.
+    echo "logging.save_best.save_every=$SAVE_STEPS"
+  fi
 }
 
 # The cache directory name is derived from the preprocess dataset_path, so running
@@ -289,9 +412,22 @@ require_cache() {
   fi
 }
 
+# SaveBestCallback only saves from on_evaluate, so a save interval that is not a
+# multiple of the eval cadence never fires. The HF checkpoints are unaffected.
+warn_save_alignment() {
+  local eval_every="$1"
+  if [ "$SAVE_STEPS" != "0" ] && [ $((SAVE_STEPS % eval_every)) -ne 0 ]; then
+    printf '\033[33m  ! SAVE_STEPS=%s is not a multiple of the eval interval (%s);\033[0m\n' \
+      "$SAVE_STEPS" "$eval_every"
+    printf '\033[33m    checkpoint-<step> still lands, but the ckpt-latest-* copy will not.\033[0m\n'
+  fi
+}
+
 do_smoke() {
   banner "smoke training run (20 steps)"
   require_cache
+  resolve_resume "${EXP_NAME}_smoke"
+  warn_save_alignment 10
   # shellcheck disable=SC2046
   $RUN python train.py $(train_args) \
     training.max_steps=20 \
@@ -304,6 +440,8 @@ do_smoke() {
 do_train() {
   banner "training: $EXP_NAME"
   require_cache
+  resolve_resume "$EXP_NAME"
+  warn_save_alignment 50
   # WANDB=off skips logging entirely; WANDB_ENTITY picks the team/user to log
   # under (unset = the logged-in account's default entity).
   local log_args="logging.log_to=[wandb]"
@@ -333,6 +471,34 @@ case "$stage" in
   smoke)      do_smoke ;;
   train)      do_train ;;
   names)      $RUN python -m robometer.data.b1k_variants "$RES" ;;
+  checkpoints)
+              for exp in "$EXP_NAME" "${EXP_NAME}_smoke"; do
+                dir="$PWD/logs/$exp"
+                banner "$dir"
+                if [ ! -d "$dir" ]; then
+                  echo "  (no such directory -- nothing to resume)"
+                  continue
+                fi
+                # `ls -1d a* b*` exits non-zero when only one pattern matches, so
+                # count first rather than relying on its status.
+                found=0
+                for entry in "$dir"/checkpoint-* "$dir"/ckpt-*; do
+                  [ -d "$entry" ] || continue
+                  echo "  $entry"
+                  found=1
+                done
+                [ "$found" = "1" ] || echo "  (no checkpoints yet)"
+                newest="$(latest_checkpoint "$dir")"
+                if [ -n "$newest" ]; then
+                  echo
+                  echo "  RESUME=auto would use: $newest"
+                  if [ -f "$newest/optimizer.pt" ]; then
+                    echo "  optimizer state: present (full resume)"
+                  else
+                    echo "  optimizer state: MISSING (step and data order restored, optimizer restarts)"
+                  fi
+                fi
+              done ;;
   all)        do_check; do_convert; do_preview; do_preprocess; do_verify
               banner "stopped before training on purpose"
               echo "look at $B1K_DATASET_DIR/preview.png, then: RES=$RES ./scripts/b1k_pipeline.sh smoke" ;;

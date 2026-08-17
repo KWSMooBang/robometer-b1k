@@ -261,6 +261,13 @@ def resolve_checkpoint_path(checkpoint_path: str | None, hub_token: str | None =
         logger.info(f"Using local checkpoint: {checkpoint_path}")
         return checkpoint_path
 
+    # A relative path that actually exists on disk is a local checkpoint, not a
+    # Hub repo. Without this, "logs/my_run/checkpoint-400" matches the "contains
+    # a slash" rule below and fails as a missing repository.
+    if os.path.isdir(checkpoint_path):
+        logger.info(f"Using local checkpoint: {checkpoint_path}")
+        return checkpoint_path
+
     # Check if it looks like a HuggingFace repo (contains /)
     if "/" in checkpoint_path:
         repo_id, revision = parse_hf_model_id_and_revision(checkpoint_path, model_name="checkpoint")

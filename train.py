@@ -123,6 +123,7 @@ def train(cfg: ExperimentConfig):
 
     # Handle output directory existence (works with accelerate/distributed training)
     overwrite_output_dir = getattr(cfg.training, "overwrite_output_dir", False)
+    is_resuming = bool(getattr(cfg.training, "resume_from_checkpoint", None))
 
     # Check if distributed training is initialized (for proper synchronization)
     # This is important for accelerate/FSDP setups where multiple processes run
@@ -130,13 +131,26 @@ def train(cfg: ExperimentConfig):
 
     # Check if output directory exists (only on rank 0 to avoid race conditions)
     if is_rank_0() and os.path.exists(output_dir):
-        if overwrite_output_dir:
+        if is_resuming:
+            # Neither branch below is survivable when resuming. The checkpoint
+            # normally lives *inside* this directory, so overwrite_output_dir=True
+            # would delete the very checkpoint we are about to read (this runs long
+            # before resume_from_checkpoint is resolved), and False would abort on
+            # a directory the resume requires. Keep it: the trainer writes new
+            # checkpoints alongside the old ones, and wandb_info.json surviving is
+            # what lets the run continue in the same wandb run rather than a new one.
+            rank_0_info(
+                f"Output directory {output_dir} already exists and resume_from_checkpoint is set "
+                f"-- keeping it (overwrite_output_dir={overwrite_output_dir} ignored while resuming)."
+            )
+        elif overwrite_output_dir:
             rank_0_info(f"Output directory {output_dir} already exists. Overwriting (overwrite_output_dir=True)...")
             shutil.rmtree(output_dir)
         else:
             raise ValueError(
                 f"Output directory {output_dir} already exists. "
-                f"Set overwrite_output_dir=True in config to overwrite it, or use a different output directory."
+                f"Set overwrite_output_dir=True in config to overwrite it, or use a different output directory. "
+                f"To continue an interrupted run instead, set training.resume_from_checkpoint."
             )
 
     # Synchronize all processes before creating directory (important for distributed training)
